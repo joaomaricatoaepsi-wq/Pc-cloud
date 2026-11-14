@@ -1,47 +1,65 @@
-name: PC Virtual Ubuntu
+name: PC Cloud
 
 on:
   workflow_dispatch:
-    inputs:
-      crd_command:
-        description: 'Cola aqui o comando do Chrome Remote Desktop (Debian Linux)'
-        required: true
-      pin:
-        description: 'Define um PIN de 6 dígitos para aceder'
-        required: true
-        default: '123456'
 
 jobs:
-  build:
+  pc-cloud:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Dura até 6 horas seguidas
+    timeout-minutes: 350
 
     steps:
-      - name: Atualizar sistema e instalar Interface Gráfica (XFCE)
+      # 1. Instala ferramentas (zstd é usado para compactar os dados)
+      - name: Instalar dependências
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies dbus-x11 xbase-clients python3-psutil
+          sudo apt-get install -y htop curl wget git unzip build-essential zstd
 
-      - name: Instalar Google Chrome
-        run: |
-          wget https://google.com
-          sudo apt install -y ./google-chrome-stable_current_amd64.deb
+      # 2. Restaura o backup da última execução (se existir)
+      - name: Restaurar dados salvos
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/pc-home.tar.zst
+          key: pc-home-${{ github.run_id }}
+          restore-keys: |
+            pc-home-
 
-      - name: Instalar Chrome Remote Desktop
+      # 3. Extrai os dados para a pasta de trabalho
+      - name: Extrair dados
         run: |
-          wget https://google.com
-          sudo apt install -y ./chrome-remote-desktop_current_amd64.deb
+          if [ -f /tmp/pc-home.tar.zst ]; then
+            tar -I zstd -xf /tmp/pc-home.tar.zst -C "$HOME"
+            echo "Dados restaurados da execução anterior."
+          else
+            echo "Primeira execução: nada para restaurar."
+          fi
+          mkdir -p "$HOME/workspace"
 
-      - name: Configurar Ambiente Gráfico
+      # 4. Mostra as especificações da máquina
+      - name: Informações da máquina
         run: |
-          sudo bash -c 'echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /etc/chrome-remote-desktop-session'
-          sudo usermod -a -G chrome-remote-desktop $USER
+          echo "=== CPU ==="
+          nproc
+          echo "=== Memória ==="
+          free -h
+          echo "=== Disco ==="
+          df -h
 
-      - name: Iniciar PC Virtual
+      # 5. Sessão remota (tmate)
+      - name: Sessão SSH (tmate)
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 300
+
+      # 6. Compacta a pasta de trabalho ao final da sessão
+      - name: Compactar dados
+        if: always()
         run: |
-          DISPLAY= /opt/google/chrome-remote-desktop/start-host --code="${{ github.event.inputs.crd_command }}" --redirect-url="https://google.com" --name="GitHub-PC" --pin="${{ github.event.inputs.pin }}"
-          
-      - name: Manter o PC ligado
-        run: |
-          echo "O teu PC está pronto! Acede em https://google.com"
-          sleep 21000
+          tar -I zstd -cf /tmp/pc-home.tar.zst -C "$HOME" workspace
+
+      # 7. Envia o backup para o cache do GitHub
+      - name: Salvar no cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pc-home.tar.zst
+          key: pc-home-${{ github.run_id }}
